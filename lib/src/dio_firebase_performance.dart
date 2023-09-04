@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:firebase_performance/firebase_performance.dart';
 
@@ -23,16 +25,18 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
   final ResponseContentLengthMethod responseContentLengthMethod;
 
   @override
-  void onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
+  void onRequest(
+      RequestOptions options, RequestInterceptorHandler handler) async {
     try {
-      final metric =
-          FirebasePerformance.instance.newHttpMetric(options.uri.normalized(), options.method.asHttpMethod()!);
+      final metric = FirebasePerformance.instance.newHttpMetric(
+          options.uri.normalized(), options.method.asHttpMethod()!);
 
       final requestKey = options.extra.hashCode;
       _map[requestKey] = metric;
       final requestContentLength = requestContentLengthMethod(options);
       metric.start();
-      if (requestContentLength != null) metric.requestPayloadSize = requestContentLength;
+      if (requestContentLength != null)
+        metric.requestPayloadSize = requestContentLength;
     } catch (_) {}
     return super.onRequest(options, handler);
   }
@@ -50,7 +54,7 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
   }
 
   @override
-  Future onError(DioError err, ErrorInterceptorHandler handler) async {
+  Future onError(DioException err, ErrorInterceptorHandler handler) async {
     try {
       final requestKey = err.response!.extra.hashCode;
       final metric = _map[requestKey];
@@ -65,29 +69,38 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
 typedef RequestContentLengthMethod = int? Function(RequestOptions options);
 
 int? defaultRequestContentLength(RequestOptions options) {
-  try {
-    if (options.data is String || options.data is Map) {
-      return options.headers.toString().length + (options.data?.toString().length ?? 0);
-    }
-  } catch (_) {}
+  if (options.data is String || options.data is Map || options.data is List) {
+    try {
+      return jsonEncode(options.headers).length +
+          (options.data == null ? 0 : jsonEncode(options.data).length);
+    } catch (_) {}
+  }
   return null;
 }
 
 typedef ResponseContentLengthMethod = int? Function(Response options);
 
 int? defaultResponseContentLength(Response response) {
-  if (response.data is String || response.data is Map || response.data is List)
-    return response.data.toString().length + response.headers.toString().length;
+  if (response.data is String ||
+      response.data is Map ||
+      response.data is List) {
+    try {
+      return jsonEncode(response.data).length +
+          jsonEncode(response.headers).length;
+    } catch (_) {}
+  }
   return null;
 }
 
 extension _ResponseHttpMetric on HttpMetric {
-  void setResponse(Response? value, ResponseContentLengthMethod responseContentLengthMethod) {
+  void setResponse(Response? value,
+      ResponseContentLengthMethod responseContentLengthMethod) {
     if (value == null) {
       return;
     }
     final responseContentLength = responseContentLengthMethod(value);
-    if (responseContentLength != null) responsePayloadSize = responseContentLength;
+    if (responseContentLength != null)
+      responsePayloadSize = responseContentLength;
     final contentType = value.headers.value.call(Headers.contentTypeHeader);
     if (contentType != null) responseContentType = contentType;
     if (value.statusCode != null) httpResponseCode = value.statusCode;
