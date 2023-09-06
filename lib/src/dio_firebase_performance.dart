@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:firebase_performance/firebase_performance.dart';
@@ -15,14 +16,20 @@ import 'package:firebase_performance/firebase_performance.dart';
 /// This interceptor might be counting parsing time into elapsed API call duration.
 /// I am not fully aware of [Dio] internal architecture.
 class DioFirebasePerformanceInterceptor extends Interceptor {
-  DioFirebasePerformanceInterceptor(
-      {this.requestContentLengthMethod = defaultRequestContentLength,
-      this.responseContentLengthMethod = defaultResponseContentLength});
+  DioFirebasePerformanceInterceptor({
+    this.requestContentLengthMethod = defaultRequestContentLength,
+    this.responseContentLengthMethod = defaultResponseContentLength,
+    this.keyMethod = defaultRequestKey,
+  });
 
-  /// key: requestKey hash code, value: ongoing metric
-  final _map = <int, HttpMetric>{};
+  /// key: requestKey, value: ongoing metric
+  final _map = <Object?, HttpMetric>{};
   final RequestContentLengthMethod requestContentLengthMethod;
   final ResponseContentLengthMethod responseContentLengthMethod;
+  final RequestKeyMethod keyMethod;
+  static const extraKey = '_firebase_performance_key';
+  final _random = Random();
+  static const _maxKeyValue = 1<<32;
 
   @override
   void onRequest(
@@ -31,7 +38,8 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
       final metric = FirebasePerformance.instance.newHttpMetric(
           options.uri.normalized(), options.method.asHttpMethod()!);
 
-      final requestKey = options.extra.hashCode;
+      options.extra[extraKey] = _random.nextInt(_maxKeyValue);
+      final requestKey = keyMethod(options);
       _map[requestKey] = metric;
       final requestContentLength = requestContentLengthMethod(options);
       metric.start();
@@ -44,7 +52,7 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) async {
     try {
-      final requestKey = response.extra.hashCode;
+      final requestKey = keyMethod(response.requestOptions);
       final metric = _map[requestKey];
       metric!.setResponse(response, responseContentLengthMethod);
       metric.stop();
@@ -56,13 +64,17 @@ class DioFirebasePerformanceInterceptor extends Interceptor {
   @override
   Future onError(DioException err, ErrorInterceptorHandler handler) async {
     try {
-      final requestKey = err.response!.extra.hashCode;
+      final requestKey = keyMethod(err.requestOptions);
       final metric = _map[requestKey];
       metric!.setResponse(err.response, responseContentLengthMethod);
       metric.stop();
       _map.remove(requestKey);
     } catch (_) {}
     return super.onError(err, handler);
+  }
+
+  static int? defaultRequestKey(RequestOptions options) {
+    return options.extra[extraKey];
   }
 }
 
@@ -91,6 +103,8 @@ int? defaultResponseContentLength(Response response) {
   }
   return null;
 }
+
+typedef RequestKeyMethod = Object? Function(RequestOptions options);
 
 extension _ResponseHttpMetric on HttpMetric {
   void setResponse(Response? value,
